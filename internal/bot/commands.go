@@ -16,6 +16,7 @@ const Help = `GameParty — команды в группе:
 /alias Название игры | алиас, другой алиас — только администратор
 /ready Игра | 23:00 — создать сбор или указать готовность в сегодняшнем сборе UTC
 /join Игра — присоединиться с предложенным временем
+/leave Игра — выйти из сбора; пустая пати удаляется
 /party Игра — состав и время в своём поясе
 /party Игра | all — время во всех поясах группы
 /parties — активные сборы
@@ -186,7 +187,7 @@ func (s *State) Apply(in Input, now time.Time) (Result, error) {
 		}
 		p.Members[in.UserID] = t
 		return Result{Text: s.render(p, in.UserID, false), PartyID: p.ID}, nil
-	case "/join", "/party", "/invite", "/ping":
+	case "/join", "/leave", "/party", "/invite", "/ping":
 		all := false
 		if cmd == "/party" && len(parts) == 2 && strings.TrimSpace(parts[1]) == "all" {
 			all = true
@@ -206,6 +207,21 @@ func (s *State) Apply(in Input, now time.Time) (Result, error) {
 			return fail("Сбор не найден или истёк")
 		}
 		switch cmd {
+		case "/leave":
+			if _, member := p.Members[in.UserID]; !member {
+				return fail("Вы не участвуете в этом сборе")
+			}
+			delete(p.Members, in.UserID)
+			if len(p.Members) == 0 {
+				delete(s.Parties, p.ID)
+				for key, id := range s.Days {
+					if id == p.ID {
+						delete(s.Days, key)
+					}
+				}
+				return ok("Вы вышли из сбора. Пати на " + html.EscapeString(s.Games[p.Game]) + " удалена: участников больше нет.")
+			}
+			return Result{Text: "Вы вышли из сбора.\n" + s.render(p, in.UserID, false), PartyID: p.ID}, nil
 		case "/join":
 			if _, exists := p.Members[in.UserID]; !exists {
 				p.Members[in.UserID] = p.Proposed

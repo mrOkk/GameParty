@@ -67,6 +67,7 @@ go run ./cmd/server
 
 ```text
 /join cs
+/leave cs
 /ready контра | 01:00
 /party cs2
 /party Counter-Strike 2 | all

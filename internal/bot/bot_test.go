@@ -160,6 +160,35 @@ func TestClosedDayCannotBeRecreated(t *testing.T) {
 	}
 }
 
+func TestLeaveAndRecreate(t *testing.T) {
+	s := NewState()
+	now := date("2026-10-14T19:00:00Z")
+	for id := int64(1); id <= 3; id++ {
+		apply(t, s, id, id, "/register UTC | cs", now)
+	}
+	first := apply(t, s, 4, 1, "/ready cs | 20:00", now)
+	apply(t, s, 5, 2, "/ready cs2 | 23:00", now)
+	if _, e := s.Apply(Input{UserID: 3, Text: "/leave cs"}, now); e == nil {
+		t.Fatal("nonmember leave accepted")
+	}
+	apply(t, s, 6, 2, "/leave контра", now)
+	p := s.Parties[first.PartyID]
+	if len(p.Members) != 1 || !p.expires().Equal(date("2026-10-14T22:00:00Z")) {
+		t.Fatal("leave did not recalculate expiration")
+	}
+	apply(t, s, 7, 1, "/leave Counter-Strike 2", now)
+	if len(s.Parties) != 0 || len(s.Days) != 0 || len(s.Profiles) != 3 {
+		t.Fatal("empty party cleanup incorrect")
+	}
+	second := apply(t, s, 8, 3, "/ready cs | 21:00", now)
+	if second.PartyID == first.PartyID {
+		t.Fatal("party ID reused")
+	}
+	if s.active(first.PartyID, now) != nil {
+		t.Fatal("old button remains active")
+	}
+}
+
 type memoryStore struct {
 	mu       sync.Mutex
 	data     map[int64]string
