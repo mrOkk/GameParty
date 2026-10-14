@@ -205,7 +205,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(200)
 			return
 		}
-		result, e := state.Apply(Input{u.ID, m.From.ID, strings.TrimSpace(m.From.First + " " + m.From.Last), m.Text, admin}, now)
+		text := m.Text
+		var result Result
+		if u.Callback != nil {
+			p := state.active(u.Callback.Data, now)
+			if p == nil || state.today(p.Game, now) != p {
+				e = fmt.Errorf("Эта карточка сбора устарела. Используйте /parties")
+			} else {
+				text = "/join " + state.Games[p.Game]
+			}
+		}
+		if e == nil {
+			result, e = state.Apply(Input{u.ID, m.From.ID, strings.TrimSpace(m.From.First + " " + m.From.Last), text, admin}, now)
+		}
 		if e != nil {
 			result = Result{Text: html.EscapeString(e.Error())}
 		}

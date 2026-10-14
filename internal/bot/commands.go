@@ -15,14 +15,13 @@ const Help = `GameParty — команды в группе:
 /addgame Название — добавить игру
 /alias Название игры | алиас, другой алиас — только администратор
 /ready Игра | 23:00 — создать сбор или указать готовность в сегодняшнем сборе UTC
-/join ID — присоединиться с предложенным временем
-/ready #ID | 01:00 — своё время в конкретном сборе
-/party ID — состав и время в своём поясе
-/party ID all — время во всех поясах группы
+/join Игра — присоединиться с предложенным временем
+/party Игра — состав и время в своём поясе
+/party Игра | all — время во всех поясах группы
 /parties — активные сборы
-/invite ID — пинг отслеживающих игру
-/ping ID — пора собираться, пинг всех участников
-Вместо HH:MM можно указать YYYY-MM-DD HH:MM. Без даты — ближайшее будущее время в вашем поясе. ID указан в карточке сбора.`
+/invite Игра — пинг отслеживающих игру
+/ping Игра — пора собираться, пинг всех участников
+Во всех командах используйте название или алиас игры, например cs2 или Dota 2.`
 
 type Input struct {
 	UpdateID, UserID int64
@@ -148,9 +147,9 @@ func (s *State) Apply(in Input, now time.Time) (Result, error) {
 		return ok("Часовой пояс: " + html.EscapeString(profile.Zone) + "\nИгры: " + html.EscapeString(strings.Join(games, ", ")))
 	case "/parties":
 		var lines []string
-		for _, id := range sortedKeys(s.Parties) {
-			if p := s.active(id, now); p != nil {
-				lines = append(lines, fmt.Sprintf("%s · <code>%s</code> · %d участников", html.EscapeString(s.Games[p.Game]), id, len(p.Members)))
+		for _, game := range sortedKeys(s.Games) {
+			if p := s.today(game, now); p != nil {
+				lines = append(lines, fmt.Sprintf("%s · %d участников", html.EscapeString(s.Games[p.Game]), len(p.Members)))
 			}
 		}
 		if len(lines) == 0 {
@@ -159,7 +158,7 @@ func (s *State) Apply(in Input, now time.Time) (Result, error) {
 		return ok(strings.Join(lines, "\n"))
 	case "/ready":
 		if len(parts) != 2 {
-			return fail("/ready Игра | HH:MM или /ready #ID | HH:MM")
+			return fail("/ready Игра | HH:MM")
 		}
 		t, e := ParseTime(strings.TrimSpace(parts[1]), profile.Zone, now)
 		if e != nil {
@@ -167,12 +166,7 @@ func (s *State) Apply(in Input, now time.Time) (Result, error) {
 		}
 		target := strings.TrimSpace(parts[0])
 		var p *Party
-		if strings.HasPrefix(target, "#") {
-			p = s.active(strings.TrimPrefix(target, "#"), now)
-			if p == nil {
-				return fail("Сбор не найден или истёк")
-			}
-		} else {
+		{
 			g := s.game(target)
 			if g == "" {
 				return fail("Неизвестная игра. Используйте /games или /addgame")
@@ -193,11 +187,21 @@ func (s *State) Apply(in Input, now time.Time) (Result, error) {
 		p.Members[in.UserID] = t
 		return Result{Text: s.render(p, in.UserID, false), PartyID: p.ID}, nil
 	case "/join", "/party", "/invite", "/ping":
-		args := strings.Fields(arg)
-		if len(args) == 0 {
-			return fail("Укажите ID сбора из /parties")
+		all := false
+		if cmd == "/party" && len(parts) == 2 && strings.TrimSpace(parts[1]) == "all" {
+			all = true
+			arg = strings.TrimSpace(parts[0])
 		}
-		p := s.active(strings.TrimPrefix(args[0], "#"), now)
+		// Also accept the familiar /party Dota 2 all spelling.
+		if cmd == "/party" && s.game(arg) == "" && strings.HasSuffix(arg, " all") {
+			all = true
+			arg = strings.TrimSpace(strings.TrimSuffix(arg, " all"))
+		}
+		g := s.game(arg)
+		if g == "" {
+			return fail("Укажите название или алиас игры из /games")
+		}
+		p := s.today(g, now)
 		if p == nil {
 			return fail("Сбор не найден или истёк")
 		}
@@ -208,7 +212,7 @@ func (s *State) Apply(in Input, now time.Time) (Result, error) {
 			}
 			return Result{Text: s.render(p, in.UserID, false), PartyID: p.ID}, nil
 		case "/party":
-			return Result{Text: s.render(p, in.UserID, len(args) > 1 && args[1] == "all"), PartyID: p.ID}, nil
+			return Result{Text: s.render(p, in.UserID, all), PartyID: p.ID}, nil
 		case "/ping", "/invite":
 			if _, member := p.Members[in.UserID]; !member {
 				return fail("Пинг доступен участникам этого сбора")

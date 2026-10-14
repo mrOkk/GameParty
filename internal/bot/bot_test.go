@@ -34,11 +34,11 @@ func TestPartyLifecycle(t *testing.T) {
 	apply(t, s, 2, 2, "/register Europe/Berlin | cs2", now)
 	first := apply(t, s, 3, 1, "/ready cs | 23:00", now)
 	p := s.Parties[first.PartyID]
-	apply(t, s, 4, 2, "/join "+p.ID, now)
+	apply(t, s, 4, 2, "/join Counter-Strike 2", now)
 	if !p.Members[2].Equal(p.Proposed) {
 		t.Fatal("join must accept proposed time")
 	}
-	apply(t, s, 5, 2, "/ready #"+p.ID+" | 2026-10-15 03:00", now)
+	apply(t, s, 5, 2, "/ready контра | 03:00", now)
 	if got := p.expires(); !got.Equal(date("2026-10-15T03:00:00Z")) {
 		t.Fatalf("expiration: %s", got)
 	}
@@ -46,18 +46,21 @@ func TestPartyLifecycle(t *testing.T) {
 		t.Fatal("aliases must share a party")
 	}
 	later := date("2026-10-15T00:05:00Z")
+	if got := apply(t, s, 9, 2, "/party cs", later); got.PartyID != first.PartyID {
+		t.Fatal("night continuation lost")
+	}
 	second := apply(t, s, 6, 1, "/ready cs2 | 04:00", later)
 	if second.PartyID == first.PartyID || s.active(first.PartyID, later) == nil {
 		t.Fatal("old and new daily parties should coexist")
 	}
-	apply(t, s, 7, 1, "/ready #"+first.PartyID+" | 05:00", later)
-	if !p.Members[1].Equal(date("2026-10-15T02:00:00Z")) {
-		t.Fatal("explicit old party must be updated")
+	apply(t, s, 7, 1, "/ready cs | 05:00", later)
+	if !s.Parties[second.PartyID].Members[1].Equal(date("2026-10-15T02:00:00Z")) || !p.Members[1].Equal(p.Proposed) {
+		t.Fatal("game command must update current party only")
 	}
 	if s.active(first.PartyID, p.expires()) != nil {
 		t.Fatal("expiration boundary must be exclusive")
 	}
-	if _, e := s.Apply(Input{UserID: 1, Text: "/join " + p.ID}, p.expires()); e == nil {
+	if _, e := s.Apply(Input{UserID: 1, Text: "/join cs"}, s.Parties[second.PartyID].expires()); e == nil {
 		t.Fatal("expired join accepted")
 	}
 	apply(t, s, 8, 1, "/register Europe/Moscow | cs2", p.expires())
@@ -73,7 +76,6 @@ func TestNextLocalTime(t *testing.T) {
 		{"2026-10-14T19:00:00Z", "23:00", "Europe/Moscow", "2026-10-14T20:00:00Z"},
 		{"2026-10-14T20:00:00Z", "01:00", "Europe/Moscow", "2026-10-14T22:00:00Z"},
 		{"2026-10-14T22:30:00Z", "01:00", "Europe/Moscow", "2026-10-15T22:00:00Z"},
-		{"2026-10-14T12:00:00Z", "2026-10-16 01:00", "Asia/Yekaterinburg", "2026-10-15T20:00:00Z"},
 		{"2026-10-25T00:45:00Z", "02:30", "Europe/Berlin", "2026-10-25T01:30:00Z"},
 	} {
 		got, e := ParseTime(tc.input, tc.zone, date(tc.now))
@@ -81,13 +83,34 @@ func TestNextLocalTime(t *testing.T) {
 			t.Errorf("%+v got %s %v", tc, got, e)
 		}
 	}
-	for _, v := range []string{"25:00", "tomorrow", "2026-10-13 01:00"} {
+	for _, v := range []string{"25:00", "tomorrow", "2026-10-13 01:00", "2026-10-16 01:00"} {
 		if _, e := ParseTime(v, "UTC", date("2026-10-14T12:00:00Z")); e == nil {
 			t.Errorf("accepted %s", v)
 		}
 	}
-	if _, e := ParseTime("2026-03-29 02:30", "Europe/Berlin", date("2026-03-28T12:00:00Z")); e == nil {
+	if _, e := ParseTime("02:30", "Europe/Berlin", date("2026-03-28T12:00:00Z")); e == nil {
 		t.Fatal("nonexistent DST time accepted")
+	}
+}
+
+func TestGameCommandsWithSpaces(t *testing.T) {
+	s := NewState()
+	now := date("2026-10-14T19:00:00Z")
+	apply(t, s, 1, 1, "/register Europe/Moscow | Dota 2", now)
+	party := apply(t, s, 2, 1, "/ready Dota 2 | 23:00", now)
+	for i, cmd := range []string{"/join Dota 2", "/party Dota 2", "/party Dota 2 | all", "/party Dota 2 all", "/invite Dota 2", "/ping Dota 2"} {
+		r := apply(t, s, int64(i+3), 1, cmd, now)
+		if r.PartyID != party.PartyID {
+			t.Fatal("wrong party", cmd)
+		}
+		if strings.Contains(r.Text, "<code>"+party.PartyID+"</code>") {
+			t.Fatal("internal ID exposed")
+		}
+	}
+	for _, cmd := range []string{"/join " + party.PartyID, "/ready #" + party.PartyID + " | 23:00", "/ready Dota 2 | 2026-10-15 23:00"} {
+		if _, e := s.Apply(Input{UserID: 1, Text: cmd}, now); e == nil {
+			t.Fatal("legacy ID or future date accepted", cmd)
+		}
 	}
 }
 func TestPermissionsAndPings(t *testing.T) {
@@ -96,16 +119,16 @@ func TestPermissionsAndPings(t *testing.T) {
 	for i := int64(1); i <= 3; i++ {
 		apply(t, s, i, i, "/register UTC | cs", now)
 	}
-	p := apply(t, s, 4, 1, "/ready cs | 23:00", now)
-	apply(t, s, 5, 2, "/ready #"+p.PartyID+" | 23:30", now)
-	if _, e := s.Apply(Input{UserID: 3, Text: "/ping " + p.PartyID}, now); e == nil {
+	apply(t, s, 4, 1, "/ready cs | 23:00", now)
+	apply(t, s, 5, 2, "/ready cs2 | 23:30", now)
+	if _, e := s.Apply(Input{UserID: 3, Text: "/ping cs"}, now); e == nil {
 		t.Fatal("nonmember ping accepted")
 	}
-	ping := apply(t, s, 6, 1, "/ping "+p.PartyID, now)
+	ping := apply(t, s, 6, 1, "/ping контра", now)
 	if !ping.Notify || !strings.Contains(ping.Text, "id=2") || strings.Contains(ping.Text, "id=3") {
 		t.Fatal("ping audience incorrect")
 	}
-	invite := apply(t, s, 7, 1, "/invite "+p.PartyID, now)
+	invite := apply(t, s, 7, 1, "/invite Counter-Strike 2", now)
 	if !strings.Contains(invite.Text, "id=3") {
 		t.Fatal("watcher missing")
 	}
@@ -202,7 +225,7 @@ func TestWebhookSecurityIsolationAndRetry(t *testing.T) {
 	if len(other.Profiles) != 0 {
 		t.Fatal("group profile leaked")
 	}
-	w = request(s, update(3, "/party 2"), "secret")
+	w = request(s, update(3, "/party cs"), "secret")
 	if !strings.Contains(w.Body.String(), `\u0026lt;Oleg\u0026gt;`) {
 		t.Fatal("user name not escaped", w.Body.String())
 	}
@@ -224,13 +247,13 @@ func TestNotificationResumes(t *testing.T) {
 	s := &Server{Store: store, Secret: "secret", Client: api.Client(), APIBase: api.URL, Now: func() time.Time { return date("2026-10-14T12:00:00Z") }}
 	request(s, update(1, "/register UTC | cs"), "secret")
 	request(s, update(2, "/ready cs | 23:00"), "secret")
-	if w := request(s, update(3, "/ping 2"), "secret"); w.Code != 503 {
+	if w := request(s, update(3, "/ping cs"), "secret"); w.Code != 503 {
 		t.Fatal("expected retry on delivery failure", w.Code)
 	}
-	if w := request(s, update(3, "/ping 2"), "secret"); w.Code != 200 {
+	if w := request(s, update(3, "/ping cs"), "secret"); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
-	request(s, update(3, "/ping 2"), "secret")
+	request(s, update(3, "/ping cs"), "secret")
 	if calls != 2 {
 		t.Fatal("delivered ping repeated", calls)
 	}

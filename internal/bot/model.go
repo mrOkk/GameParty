@@ -70,16 +70,33 @@ func (s *State) active(id string, now time.Time) *Party {
 	}
 	return p
 }
+func (s *State) today(game string, now time.Time) *Party {
+	if id, exists := s.Days[now.UTC().Format("2006-01-02")+":"+game]; exists {
+		return s.active(id, now)
+	}
+	// A late-night continuation remains available until a new UTC-day party starts.
+	var result *Party
+	for _, id := range sortedKeys(s.Parties) {
+		p := s.active(id, now)
+		if p != nil && p.Game == game && (result == nil || p.Proposed.After(result.Proposed)) {
+			result = p
+		}
+	}
+	return result
+}
 func ParseTime(v, zone string, now time.Time) (time.Time, error) {
 	loc, e := time.LoadLocation(zone)
 	if e != nil {
 		return time.Time{}, fmt.Errorf("Неизвестный часовой пояс")
 	}
 	local := now.In(loc)
+	if len(v) != 5 {
+		return time.Time{}, fmt.Errorf("Укажите только время HH:MM. Сборы на будущие даты не поддерживаются")
+	}
 	if len(v) == 5 {
 		clock, e := time.Parse("15:04", v)
 		if e != nil {
-			return time.Time{}, fmt.Errorf("Время: HH:MM или YYYY-MM-DD HH:MM")
+			return time.Time{}, fmt.Errorf("Укажите время HH:MM")
 		}
 		for day := 0; day < 2; day++ {
 			d := local.AddDate(0, 0, day)
@@ -95,16 +112,7 @@ func ParseTime(v, zone string, now time.Time) (time.Time, error) {
 		}
 		return time.Time{}, fmt.Errorf("Укажите дату и время")
 	}
-	t, e := time.ParseInLocation("2006-01-02 15:04", v, loc)
-	if e != nil || t.Format("2006-01-02 15:04") != v {
-		return time.Time{}, fmt.Errorf("Время: HH:MM или YYYY-MM-DD HH:MM")
-	}
-	for _, candidate := range localTimes(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), loc) {
-		if candidate.After(now) {
-			return candidate, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("Укажите будущее время")
+	return time.Time{}, fmt.Errorf("Укажите время HH:MM")
 }
 
 // During a clock rollback a wall-clock minute can occur twice. Choose the
@@ -150,7 +158,7 @@ func (s *State) render(p *Party, viewer int64, all bool) string {
 	if len(zones) == 0 {
 		zones["UTC"] = true
 	}
-	out := fmt.Sprintf("<b>%s</b> · сбор <code>%s</code>\n", html.EscapeString(s.Games[p.Game]), p.ID)
+	out := fmt.Sprintf("<b>%s</b>\n", html.EscapeString(s.Games[p.Game]))
 	ids := make([]int64, 0, len(p.Members))
 	for id := range p.Members {
 		ids = append(ids, id)
