@@ -27,7 +27,11 @@ go.work.sum
 
 # env file
 .env
+.env.*
+!.env.example
+/server
+/server.exe
 
 # Editor/IDE
-# .idea/
+.idea/
 # .vscode/
